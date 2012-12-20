@@ -19,14 +19,21 @@ import Data.Function (on)
 import Data.Maybe (fromMaybe)
 import Data.DateTime (fromSeconds, DateTime)
 import Biolab.Types (Well(..), Measurement(..), ExpData(..), MType, ExpId, wellStr)
-import Biolab.Measurement (wellFromInts)
-import Biolab.ExpData (createExpData)
 import Data.List (find)
 import Control.Monad.Error (runErrorT)
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either.Unwrap (fromRight)
 import Data.ConfigFile (emptyCP, readfile, get)
+
+data SampleId = SampleId { sidExpId :: String, sidPlate :: Int, sidLabel :: String, sidWell :: Well} deriving (Eq, Ord, Show, Read)
+
+data SampleQuery = SampleQuery {sqExpId :: Maybe String, sqPlate :: Maybe Int, sqLabel :: Maybe String, sqWell :: Maybe Well } deriving (Eq, Ord, Show, Read)
+-- consider changing to lists instead of Maybes to allow easier selection by owner/project.
+
+
+wellFromInts :: Int -> Int -> Well
+wellFromInts r c = Well { wRow = ['a'..'h'] !! r, wColumn = c + 1 }
 
 -- consider adding table names to configuration file as well.
 dbConnectInfo :: FilePath -> IO MySQLConnectInfo
