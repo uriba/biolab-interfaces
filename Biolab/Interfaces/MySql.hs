@@ -18,18 +18,18 @@ import Data.ByteString.UTF8 (toString)
 import Data.Function (on)
 import Data.Maybe (fromMaybe)
 import Data.DateTime (fromSeconds, DateTime)
-import Biolab.Types (Well(..), Measurement(..), ExpData(..), MType, ExpId, wellStr)
-import Data.List (find)
+import Biolab.Types (Well(..), ExpData(..), MesType(..), wellStr, SampleId(..), ColonySample(..), RawMeasurement(..))
+import Data.List (find, nub, sort)
 import Control.Monad.Error (runErrorT)
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either.Unwrap (fromRight)
 import Data.ConfigFile (emptyCP, readfile, get)
+import qualified Data.Vector as V
 
-data SampleId = SampleId { sidExpId :: String, sidPlate :: Int, sidLabel :: String, sidWell :: Well} deriving (Eq, Ord, Show, Read)
+type ExpId = String
 
-data SampleQuery = SampleQuery {sqExpId :: Maybe String, sqPlate :: Maybe Int, sqLabel :: Maybe String, sqWell :: Maybe Well } deriving (Eq, Ord, Show, Read)
--- consider changing to lists instead of Maybes to allow easier selection by owner/project.
+data SampleQuery = SampleQuery {sqExpId :: [String], sqPlate :: [Int], sqWell :: [Well] } deriving (Eq, Ord, Show, Read)
 
 
 wellFromInts :: Int -> Int -> Well
@@ -59,7 +59,7 @@ dbConnectInfo cf = do
             }
     return $ fromRight rv
 
-maxVal = 70000
+maxVal = 70000 -- this hack will need resolving in the future...
 
 data SelectCriteria = SelectCriteria {scWhere :: String, scVals :: [SqlValue]}
     deriving (Show)
@@ -94,7 +94,7 @@ fromNullString SqlNull = Nothing
 fromNullString (SqlByteString s) = Just . toString $ s
 
 instance DbReadable PlateDesc where
-    dbRead [SqlByteString exp_id, SqlInt32 p, SqlByteString desc, owner, project] = --SqlByteString owner, SqlByteString project] = 
+    dbRead [SqlByteString exp_id, SqlInt32 p, SqlByteString desc, owner, project] =
         PlateDesc {
             pdExp = toString exp_id,
             pdPlate = fromIntegral p,
@@ -103,7 +103,7 @@ instance DbReadable PlateDesc where
             pdProject = fromNullString project
         }
 
-data DbMeasurement = DbMeasurement { dbmExpDesc :: ExpId, dbmPlate :: Int, dbmTime :: DateTime, dbmType :: MType, dbmWell :: Well, dbmVal :: Double } deriving (Eq, Show)
+data DbMeasurement = DbMeasurement { dbmExpDesc :: ExpId, dbmPlate :: Int, dbmTime :: DateTime, dbmType :: String, dbmWell :: Well, dbmVal :: Double } deriving (Eq, Show)
 
 instance DbReadable DbMeasurement where
     dbRead [SqlByteString exp_id, SqlInt32 plate_num, SqlByteString mt, SqlInt32 row, SqlInt32 col, SqlInt32 timestamp, v] =
@@ -128,22 +128,38 @@ readTable db_conf t_name msc = do
     entries <-  quickQuery' conn ("SELECT * FROM " ++ t_name ++ " " ++ where_clause) where_params
     return . map dbRead $ entries
 
-loadExpDataDB :: FilePath -> ExpId -> Int -> IO ExpData
+-- loadExpDataDB :: FilePath -> ExpId -> Int -> IO ExpData
 loadExpDataDB cf exp_id p = do
     db_conf <- dbConnectInfo cf
     readings <- readTable db_conf "tecan_readings" (Just $ SelectCriteria "where exp_id = ? AND plate = ?" [toSql exp_id, toSql p])
-    well_labels <- readTable db_conf "tecan_labels" (Just $ SelectCriteria "where exp_id = ? AND plate = ?" [toSql exp_id, toSql p])
-    return . createExpData . mesFromDB well_labels $ readings
+    -- well_labels <- readTable db_conf "tecan_labels" (Just $ SelectCriteria "where exp_id = ? AND plate = ?" [toSql exp_id, toSql p])
+    return . mesFromDB $ readings
 
-mesFromDB :: [WellDesc] -> [DbMeasurement] -> [Measurement]
-mesFromDB wds dbms = [ to_mes m | m <- dbms]
+dbMesSampleId :: DbMeasurement -> SampleId
+dbMesSampleId (DbMeasurement {dbmExpDesc = ed, dbmPlate = p, dbmWell = w}) = SampleId {sidExpId = ed, sidPlate = p, sidWell = w}
+
+dbMesType :: DbMeasurement -> MesType
+dbMesType (DbMeasurement {dbmType = mt})
+    | mt == "YFP" = Fluorescence 1 2
+    | mt == "CFP" = Fluorescence 3 4
+    | mt == "MCHERRY" = Fluorescence 5 6
+    | mt == "OD600" = Absorbance 600
+    | mt == "OD" = Absorbance 600
+    | otherwise = error $ "don't know how to deal with measurment of type:" ++ mt
+
+samples :: [DbMeasurement] -> [(MesType,ColonySample)]
+samples dbms = [(mt, mes mt dbms) | mt <- mts dbms]
     where
-        to_mes m = Measurement {
-            mExpDesc = dbmExpDesc m,
-            mPlate = dbmPlate m,
-            mType = dbmType m,
-            mTime = dbmTime m,
-            mWell = dbmWell m,
-            mLabel = fromMaybe (wellStr $ dbmWell m) . fmap wdDesc . find ((==) (dbmWell m) . wdWell) $ wds,
-            mVal = dbmVal m
-        }
+        mts = nub . map dbMesType
+--         mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x))
+
+mes :: MesType -> [DbMeasurement] -> ColonySample
+mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x))
+
+colonySamples :: SampleId -> [DbMeasurement] -> [DbMeasurement]
+colonySamples sid = filter ((sid ==) . dbMesSampleId)
+
+mesFromDB :: [DbMeasurement] -> [(SampleId,[(MesType,ColonySample)])]
+mesFromDB dbms = [ (sid, samples . colonySamples sid $ dbms) | sid <- sids dbms]
+    where
+        sids = nub . map dbMesSampleId
