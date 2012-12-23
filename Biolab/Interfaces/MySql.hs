@@ -31,6 +31,16 @@ type ExpId = String
 
 data SampleQuery = SampleQuery {sqExpId :: [String], sqPlate :: [Int], sqWell :: [Well] } deriving (Eq, Ord, Show, Read)
 
+sampleQueryToSC :: SampleQuery -> SelectCriteria
+sampleQueryToSC (SampleQuery {sqExpId =seid, sqPlate =sp, sqWell =sw})
+    | null seid && null sp && null sw = SelectCriteria "" []
+    | otherwise = SelectCriteria wc vals
+    where
+        vals = concat (map toSql seid ++ map toSql sp ++ map toSql sw)
+        wc = "WHERE " ++ (intercalate " AND " . filter (not . null) $ [eid,ps,ws])
+        eid = intercalate " OR " (replicate (length seid) " exp_id = ? ")
+        ps = intercalate " OR " (replicate (length sp) " plate = ? ")
+        ws = intercalate " OR " (replicate (length sw) " well = ? ")
 
 wellFromInts :: Int -> Int -> Well
 wellFromInts r c = Well { wRow = ['a'..'h'] !! r, wColumn = c + 1 }
@@ -147,14 +157,12 @@ dbMesType (DbMeasurement {dbmType = mt})
     | mt == "OD" = Absorbance 600
     | otherwise = error $ "don't know how to deal with measurment of type:" ++ mt
 
+-- assumes all measurements are of the same ColonyId
 samples :: [DbMeasurement] -> [(MesType,ColonySample)]
 samples dbms = [(mt, mes mt dbms) | mt <- mts dbms]
     where
         mts = nub . map dbMesType
---         mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x))
-
-mes :: MesType -> [DbMeasurement] -> ColonySample
-mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x))
+        mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x))
 
 colonySamples :: SampleId -> [DbMeasurement] -> [DbMeasurement]
 colonySamples sid = filter ((sid ==) . dbMesSampleId)
