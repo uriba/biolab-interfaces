@@ -19,7 +19,7 @@ import Data.Function (on)
 import Data.Maybe (fromMaybe)
 import Data.DateTime (fromSeconds, DateTime)
 import Biolab.Types (Well(..), ExpData(..), MesType(..), wellStr, SampleId(..), ColonySample(..), RawMeasurement(..))
-import Data.List (find, nub, sort)
+import Data.List (find, nub, sort, intercalate)
 import Control.Monad.Error (runErrorT)
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
@@ -36,11 +36,11 @@ sampleQueryToSC (SampleQuery {sqExpId =seid, sqPlate =sp, sqWell =sw})
     | null seid && null sp && null sw = SelectCriteria "" []
     | otherwise = SelectCriteria wc vals
     where
-        vals = concat (map toSql seid ++ map toSql sp ++ map toSql sw)
-        wc = "WHERE " ++ (intercalate " AND " . filter (not . null) $ [eid,ps,ws])
+        vals = map toSql seid ++ map toSql sp ++ map toSql sw
+        wc = "WHERE ( " ++ (intercalate " ) AND ( " . filter (not . null) $ [eid,ps,ws]) ++ " ) "
         eid = intercalate " OR " (replicate (length seid) " exp_id = ? ")
         ps = intercalate " OR " (replicate (length sp) " plate = ? ")
-        ws = intercalate " OR " (replicate (length sw) " well = ? ")
+        ws = intercalate " OR " (replicate (length sw) " col = ? AND row = ? ")
 
 wellFromInts :: Int -> Int -> Well
 wellFromInts r c = Well { wRow = ['a'..'h'] !! r, wColumn = c + 1 }
