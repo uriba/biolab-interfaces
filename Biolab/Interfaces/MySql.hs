@@ -18,6 +18,7 @@ import Data.ByteString.UTF8 (toString)
 import Data.Function (on)
 import Data.Maybe (fromMaybe)
 import Data.DateTime (fromSeconds, DateTime)
+import Data.Char (ord)
 import Biolab.Types (Well(..), ExpData(..), MesType(..), wellStr, SampleId(..), ColonySample(..), RawMeasurement(..))
 import Data.List (find, nub, sort, intercalate)
 import Control.Monad.Error (runErrorT)
@@ -36,14 +37,17 @@ sampleQueryToSC (SampleQuery {sqExpId =seid, sqPlate =sp, sqWell =sw})
     | null seid && null sp && null sw = SelectCriteria "" []
     | otherwise = SelectCriteria wc vals
     where
-        vals = map toSql seid ++ map toSql sp ++ map toSql sw
+        vals = map toSql seid ++ map toSql sp ++ concatMap wellToSql sw
         wc = "WHERE ( " ++ (intercalate " ) AND ( " . filter (not . null) $ [eid,ps,ws]) ++ " ) "
         eid = intercalate " OR " (replicate (length seid) " exp_id = ? ")
         ps = intercalate " OR " (replicate (length sp) " plate = ? ")
-        ws = intercalate " OR " (replicate (length sw) " col = ? AND row = ? ")
+        ws = intercalate " OR " (replicate (length sw) " ( col = ? AND row = ? ) ")
 
 wellFromInts :: Int -> Int -> Well
 wellFromInts r c = Well { wRow = ['a'..'h'] !! r, wColumn = c + 1 }
+
+wellToSql :: Well -> [SqlValue]
+wellToSql w = [toSql $ wColumn w - 1, toSql $ ((-) `on` ord) (wRow w) 'a']
 
 -- consider adding table names to configuration file as well.
 dbConnectInfo :: FilePath -> IO MySQLConnectInfo
