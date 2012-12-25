@@ -5,11 +5,13 @@ module Biolab.Interfaces.MySql (
     DbMeasurement(..),
     WellDesc(..),
     SelectCriteria(..),
+    SampleQuery (..),
     readTable,
     dbConnectInfo,
     mesFromDB,
     loadExpDataDB,
-    fromNullString
+    fromNullString,
+    loadMes,
     )
 where
 import Database.HDBC.MySQL
@@ -27,6 +29,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Either.Unwrap (fromRight)
 import Data.ConfigFile (emptyCP, readfile, get)
 import qualified Data.Vector as V
+import qualified Data.Map as M
 
 type ExpId = String
 
@@ -142,15 +145,26 @@ readTable db_conf t_name msc = do
     entries <-  quickQuery' conn ("SELECT * FROM " ++ t_name ++ " " ++ where_clause) where_params
     return . map dbRead $ entries
 
--- loadExpDataDB :: FilePath -> ExpId -> Int -> IO ExpData
+loadExpDataDB :: FilePath -> ExpId -> Int -> IO ExpData
 loadExpDataDB cf exp_id p = do
     db_conf <- dbConnectInfo cf
     readings <- readTable db_conf "tecan_readings" (Just $ SelectCriteria "where exp_id = ? AND plate = ?" [toSql exp_id, toSql p])
-    -- well_labels <- readTable db_conf "tecan_labels" (Just $ SelectCriteria "where exp_id = ? AND plate = ?" [toSql exp_id, toSql p])
-    return . mesFromDB $ readings
+    well_labels <- readTable db_conf "tecan_labels" (Just $ SelectCriteria "where exp_id = ? AND plate = ?" [toSql exp_id, toSql p])
+    return . makeExpData well_labels $ mesFromDB readings
+
+makeExpData :: [WellDesc] -> [(SampleId,[(MesType,ColonySample)])] -> ExpData
+makeExpData ws ss = M.fromList [ (l, l_samples l) | l <- labels]
+    where
+        labels = nub . map wdDesc $ ws
+        l_samples l = M.fromList [ (s,fromMaybe (not_found s) . lookup s $ ss) | s <- l_ids l]
+        l_ids l = map wdTosid . filter ((l ==) . wdDesc) $ ws
+        not_found s = error $ "couldn't find id:" ++ show s ++ " in measurements"
+
+wdTosid :: WellDesc -> SampleId
+wdTosid wd = SampleId {sidExpId = wdExp wd, sidPlate = wdPlate wd, sidWell = wdWell wd}
 
 dbMesSampleId :: DbMeasurement -> SampleId
-dbMesSampleId (DbMeasurement {dbmExpDesc = ed, dbmPlate = p, dbmWell = w}) = SampleId {sidExpId = ed, sidPlate = p, sidWell = w}
+dbMesSampleId m = SampleId {sidExpId = dbmExpDesc m, sidPlate = dbmPlate m, sidWell = dbmWell m}
 
 dbMesType :: DbMeasurement -> MesType
 dbMesType (DbMeasurement {dbmType = mt})
@@ -175,3 +189,6 @@ mesFromDB :: [DbMeasurement] -> [(SampleId,[(MesType,ColonySample)])]
 mesFromDB dbms = [ (sid, samples . colonySamples sid $ dbms) | sid <- sids dbms]
     where
         sids = nub . map dbMesSampleId
+
+loadMes :: MySQLConnectInfo -> SampleQuery -> IO [(SampleId,[(MesType,ColonySample)])]
+loadMes db_conf sq = fmap mesFromDB $ readTable db_conf "tecan_readings" (Just $ sampleQueryToSC sq)
