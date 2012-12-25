@@ -170,6 +170,7 @@ dbMesType :: DbMeasurement -> MesType
 dbMesType (DbMeasurement {dbmType = mt})
     | mt == "YFP" = Fluorescence 1 2
     | mt == "CFP" = Fluorescence 3 4
+    | mt == "RFP" = Fluorescence 5 6
     | mt == "MCHERRY" = Fluorescence 5 6
     | mt == "OD600" = Absorbance 600
     | mt == "OD" = Absorbance 600
@@ -180,7 +181,7 @@ samples :: [DbMeasurement] -> [(MesType,ColonySample)]
 samples dbms = [(mt, mes mt dbms) | mt <- mts dbms]
     where
         mts = nub . map dbMesType
-        mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x))
+        mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x)) . filter ((mt ==) . dbMesType)
 
 colonySamples :: SampleId -> [DbMeasurement] -> [DbMeasurement]
 colonySamples sid = filter ((sid ==) . dbMesSampleId)
