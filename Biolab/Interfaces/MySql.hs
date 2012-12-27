@@ -21,8 +21,8 @@ import Data.Function (on)
 import Data.Maybe (fromMaybe)
 import Data.DateTime (fromSeconds, DateTime)
 import Data.Char (ord)
-import Biolab.Types (Well(..), ExpData(..), MesType(..), wellStr, SampleId(..), ColonySample(..), RawMeasurement(..))
-import Data.List (find, nub, sort, intercalate)
+import Biolab.Types
+import Data.List (find, nub, sort, intercalate, group)
 import Control.Monad.Error (runErrorT)
 import Control.Monad (join)
 import Control.Monad.IO.Class (liftIO)
@@ -152,7 +152,7 @@ loadExpDataDB cf exp_id p = do
     well_labels <- readTable db_conf "tecan_labels" (Just $ SelectCriteria "where exp_id = ? AND plate = ?" [toSql exp_id, toSql p])
     return . makeExpData well_labels $ mesFromDB readings
 
-makeExpData :: [WellDesc] -> [(SampleId,[(MesType,ColonySample)])] -> ExpData
+makeExpData :: [WellDesc] -> [(SampleId,([RawAbsorbance],[RawFluorescence],[RawLuminescense]))] -> ExpData
 makeExpData ws ss = M.fromList [ (l, l_samples l) | l <- labels]
     where
         labels = nub . map wdDesc $ ws
@@ -177,19 +177,34 @@ dbMesType (DbMeasurement {dbmType = mt})
     | otherwise = error $ "don't know how to deal with measurment of type:" ++ mt
 
 -- assumes all measurements are of the same ColonyId
-samples :: [DbMeasurement] -> [(MesType,ColonySample)]
-samples dbms = [(mt, mes mt dbms) | mt <- mts dbms]
+samples :: [DbMeasurement] -> ([RawAbsorbance], [RawFluorescence], [RawLuminescense])
+samples dbms = foldl concat3 ([],[],[]) $ zipWith ($) (map mes $ mts dbms) (repeat dbms)
     where
         mts = nub . map dbMesType
-        mes mt = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x)) . filter ((mt ==) . dbMesType)
+        mes mt = binDbMes mt . filter ((mt ==) . dbMesType)
+        concat3 (a,b,c) (d,e,f) = (a++d,b++e,c++f)
+
+-- assumes all measurements are of the same ColonyId and have the same type (checked below).
+binDbMes :: MesType -> [DbMeasurement] -> ([RawAbsorbance],[RawFluorescence],[RawLuminescense])
+binDbMes (Absorbance a) dbm = ([AbsorbanceSample {asWaveLength = a, asMes = rawMes dbm}],[],[])
+binDbMes (Fluorescence a b) dbm = ([],[FluorescenseSample {flExcitation = a, flEmission = b, flMes = rawMes dbm}],[])
+binDbMes (Luminesense a) dbm = ([],[],[LuminescenseSample {lsWaveLength = a, lsMes = rawMes dbm}])
+
+rawMes :: [DbMeasurement] -> RawColonyMeasurements
+rawMes dbm
+    | single_type dbm && single_colony dbm = V.fromList . sort . map (\x -> (dbmTime x, RawMeasurement . dbmVal $ x)) $ dbm
+    | otherwise = error $ "mesurements of multiple types/colonies: " ++ show dbm
+    where
+        single_type = (1 ==) . length . group . map dbmType
+        single_colony = (1 ==) . length . group . map dbMesSampleId
 
 colonySamples :: SampleId -> [DbMeasurement] -> [DbMeasurement]
 colonySamples sid = filter ((sid ==) . dbMesSampleId)
 
-mesFromDB :: [DbMeasurement] -> [(SampleId,[(MesType,ColonySample)])]
+mesFromDB :: [DbMeasurement] -> [(SampleId,([RawAbsorbance],[RawFluorescence],[RawLuminescense]))]
 mesFromDB dbms = [ (sid, samples . colonySamples sid $ dbms) | sid <- sids dbms]
     where
         sids = nub . map dbMesSampleId
 
-loadMes :: MySQLConnectInfo -> SampleQuery -> IO [(SampleId,[(MesType,ColonySample)])]
+loadMes :: MySQLConnectInfo -> SampleQuery -> IO [(SampleId,([RawAbsorbance],[RawFluorescence],[RawLuminescense]))]
 loadMes db_conf sq = fmap mesFromDB $ readTable db_conf "tecan_readings" (Just $ sampleQueryToSC sq)
