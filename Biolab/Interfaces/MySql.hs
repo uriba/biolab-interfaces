@@ -22,6 +22,7 @@ import Data.Maybe (fromMaybe)
 import Data.DateTime (fromSeconds, DateTime)
 import Data.Char (ord)
 import Biolab.Types
+import Biolab.Interfaces.Fluorophores
 import Data.List (find, nub, sort, intercalate, group)
 import Control.Monad.Error (runErrorT)
 import Control.Monad (join)
@@ -167,14 +168,7 @@ dbMesSampleId :: DbMeasurement -> SampleId
 dbMesSampleId m = SampleId {sidExpId = dbmExpDesc m, sidPlate = dbmPlate m, sidWell = dbmWell m}
 
 dbMesType :: DbMeasurement -> MesType
-dbMesType (DbMeasurement {dbmType = mt})
-    | mt == "YFP" = Fluorescence 1 2
-    | mt == "CFP" = Fluorescence 3 4
-    | mt == "RFP" = Fluorescence 5 6
-    | mt == "MCHERRY" = Fluorescence 5 6
-    | mt == "OD600" = Absorbance 600
-    | mt == "OD" = Absorbance 600
-    | otherwise = error $ "don't know how to deal with measurment of type:" ++ mt
+dbMesType (DbMeasurement {dbmType = mt}) = flVals mt
 
 -- assumes all measurements are of the same ColonyId
 samples :: [DbMeasurement] -> [ColonyMeasurements RawMeasurement]
